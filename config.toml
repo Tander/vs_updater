@@ -5,11 +5,8 @@ cdn_url = "https://cdn.vintagestory.at/gamefiles/stable/"
 [local_server]
 server_fullpath = "/absolute/path/to/your/server/"
 backup_fullpath = "/absolute/path/to/your/server_backup/"
+data_fullpath = "/absolute/path/to/your/data"
+worldbackup_fullpath = "/absolute/path/to/your/data/WorldBackup"
 
-[fileserver.description]
-url = "Vintage Story file server URL. Should be Apache page with enabled DirectoryIndex, using for checking updates"
-cdn_url = "Vintage Story CDN URL. Using for donwloading VS server files"
-
-[local_server.description]
-server_fullpath = "Full path to your Vintage Story server instance"
-backup_fullpath = "Full path for storing previous version of server (for rollback if update fails)"
+[settings]
+verbosity_level = 20
