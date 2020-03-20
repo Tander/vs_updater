@@ -8,7 +8,7 @@
 
   You may do this by typing:
       vsupdater.py configure /path/to/your/server/
-  Also you can modify config file to get more control over paths vsupdater will use.
+  Also you can modify config file directly if you want.
 
   Then you may run update:
       vsupdater.py update
@@ -22,8 +22,9 @@ Options:
   --help  Show this message and exit.
 
 Commands:
+  autoupdate   Performing full update procedure for your server (if needed).
   check        Checking if your VS server requires update.
   configure    Configures this tool to use server instance on given path.
-  update       Performing update for your server.
+  update       Performing update for your server (if needed).
   worldbackup  Performing backup of your current world.
 ```
