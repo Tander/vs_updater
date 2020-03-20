@@ -10,3 +10,7 @@ worldbackup_fullpath = "/absolute/path/to/your/data/WorldBackup"
 
 [settings]
 verbosity_level = 20
+
+[discord.webhook]
+success = ''
+error = ''

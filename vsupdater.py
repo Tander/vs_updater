@@ -1,4 +1,5 @@
 import json
+import shlex
 from datetime import datetime
 import click
 from os import path
@@ -11,6 +12,7 @@ import tarfile
 import toml
 from shutil import copy2
 from shutil import rmtree
+import subprocess
 
 
 class Updater:
@@ -30,6 +32,7 @@ class Updater:
             self.worldbackup_fullpath = path.abspath(config['local_server']['worldbackup_fullpath'])
             # (NIY) 0 - nothing, 10 - success/fail, 20 - info, 50 - debug
             self.verbosity = config['settings']['verbosity_level']
+            self.discord = config['discord']
         except Exception:
             raise Exception('Configuration file "{}" doesn\'t contain required parameters! '
                             'Fix it and try again.'.format(self.config_name))
@@ -50,6 +53,13 @@ class Updater:
             return True
         return False
 
+    @staticmethod
+    def _is_major_minor_equal(ver1, ver2):
+        def get_major_minor(version):
+            v = str(version).split('.')
+            return '.'.join(v[:2])
+        return get_major_minor(ver1) == get_major_minor(ver2)
+
     def ensure_valid_server_path(self):
         if not self.server_valid:
             msg = 'Stored server path "{}" is incorrect! Please run "vsupdater.py configure /path/to/your/server" ' \
@@ -64,8 +74,10 @@ class Updater:
 
     def display_exception(self, e):
         if self.verbosity >= 50:
+            self.notify_about_error(str(e))
             raise e
         elif self.verbosity >= 10:
+            self.notify_about_error(str(e))
             click.echo(e)
 
     def get_last_version(self):
@@ -85,7 +97,7 @@ class Updater:
     def get_current_version(self):
         with open(path.join(self.server_fullpath, 'Info.plist'), 'rb') as fp:
             info = plistlib.load(fp)
-        return info['CFBundleShortVersionString']
+        return str(info['CFBundleShortVersionString'])
 
     def download_server(self, version):
         click.echo('Downloading server files for version {}...'.format(version))
@@ -103,12 +115,10 @@ class Updater:
         if not path.exists(self.server_fullpath):
             raise Exception('Server folder "{}" not found'.format(self.server_fullpath))
 
-        # rename old folder
         if path.exists(self.backup_fullpath):
             rmtree(self.backup_fullpath)
         rename(self.server_fullpath, self.backup_fullpath)
 
-        # create new one
         makedirs(self.server_fullpath)
 
     def unpack_server(self):
@@ -141,9 +151,9 @@ class Updater:
             if path.exists(self.server_fullpath):
                 rmtree(self.server_fullpath)
             rename(self.backup_fullpath, self.server_fullpath)
-            raise Exception('Update was failed. Error message: {}'.format(e))
+            raise Exception('Update of server files was failed. Error message: {}'.format(e))
         else:
-            click.echo('Server was successfully updated to version {}!'.format(version))
+            click.echo('Server files were successfully updated to version {}!'.format(version))
 
     @staticmethod
     def get_datapath(server_fullpath):
@@ -163,6 +173,73 @@ class Updater:
         with open(path.join(data_fullpath, 'serverconfig.json'), 'rt', encoding='utf-8') as fp:
             config = json.load(fp)
         return config['WorldConfig']['SaveFileLocation']
+
+    def send_to_server(self, command):
+        sh_path = path.join(self.server_fullpath, 'server.sh')
+        parameters = shlex.split(command)
+        result = subprocess.run((sh_path, *parameters), capture_output=True, encoding='utf-8')
+        # stdout line separators are always '\n'
+        return result.returncode, result.stdout
+
+    @staticmethod
+    def indent_text(text, indent='\t'):
+        return indent + str(text).strip('\n').replace('\n', '\n'+indent)
+
+    def server_start(self):
+        click.echo('Starting VS server...')
+        code, stdout = self.send_to_server('start')
+        click.echo('Server output:\n{}'.format(self.indent_text(stdout)))
+        if code != 0:
+            raise Exception('Failed to start VS server!')
+
+    def server_stop(self):
+        click.echo('Stopping VS server...')
+        code, stdout = self.send_to_server('stop')
+        click.echo('Server output:\n{}'.format(self.indent_text(stdout)))
+        if code != 0:
+            raise Exception('Failed to stop VS server!')
+
+    def server_command(self, text):
+        text = str(text)
+        click.echo('Executing command "{}" on VS server...'.format(text))
+        code, stdout = self.send_to_server('command "{}"'.format(text))
+        if code != 0:
+            click.echo('Server output:\n{}'.format(self.indent_text(stdout)))
+            raise Exception('Failed to execute command!')
+
+    def send_to_discord(self, message: str, m_type='info'):
+        if m_type in self.discord['webhook']:
+            if self.discord['webhook'][m_type] != '':
+                response = requests.post(self.discord['webhook'][m_type], data=message,
+                                         headers={'Content-Type': 'application/json'},)
+                if response.status_code < 400:
+                    click.echo('Message was successfully sent')
+                    return True
+                else:
+                    click.echo('Sending a message to discord failed: {}'.format(response.content))
+                    return False
+        click.echo('Note: Discord Webhook for type "{}" isn\'t set in config, message won\'t be sent'.format(m_type))
+        return False
+
+    def notify_about_update(self, version):
+        click.echo('Notifying about update by Discord WebHook...')
+        with open('files/d_template_update.jsonp', encoding='utf-8') as fp:
+            message = fp.read()
+        # discord api require color in decimal
+        message = message.format(color=int(0x6f7a27), version=version, cdn_url=self.cdn_url)
+        self.send_to_discord(message, 'success')
+
+    def notify_about_error(self, text):
+        click.echo('Notifying about error by Discord WebHook...')
+        with open('files/d_template_error.jsonp', encoding='utf-8') as fp:
+            message = fp.read()
+        text = text.replace('\\', '\\\\').replace('\"', '\\\"')
+        if len(text) > 1960:
+            text = text[:1960] + '...'
+        error = 'vsupdater encountered error:```{}```'.format(text)
+        print(error)
+        message = message.format(message=error)
+        self.send_to_discord(message, 'error')
 
     # =======================
     # ENDPOINT METHODS
@@ -201,11 +278,11 @@ class Updater:
         if cur_version == last_version:  # assuming if your version isn't the latest on official server - it's outdated
             click.echo('Current VS server version {} is latest. No need to update.'.format(cur_version))
             # return False
-            return False, last_version
+            return False, cur_version, last_version
         else:
             click.echo('Current VS server version {} is outdated. The latest is {}'.format(cur_version, last_version))
             # return last_version
-            return True, last_version
+            return True, cur_version, last_version
 
     def backup_world_file(self):
         self.ensure_valid_server_path()
@@ -227,18 +304,41 @@ class Updater:
         click.echo('Backup was successfully made and stored in "{}". You may remove it when you don\'t need it '
                    'anymore.'.format(dst))
 
-    def perform_update(self, force):
+    def perform_update(self, force, no_discord):
         self.ensure_valid_server_path()
         self.ensure_valid_data_path()
 
-        check_result = self.check_for_update()
-        if check_result[0] or force:
+        need_update, _, new_version = self.check_for_update()
+        if need_update or force:
             if force:
                 click.echo('"--force" option received, updating the server anyway!')
-            # shutting down the server will be here
-            self.backup_world_file()
-            self.update_server(check_result[1])
-            # starting updated server will be here
+            self.update_server(new_version)
+            if not no_discord:
+                self.notify_about_update(new_version)
+
+    def perform_auto_update(self, safe_update, no_discord):
+        self.ensure_valid_server_path()
+        self.ensure_valid_data_path()
+
+        need_update, cur_version, new_version = self.check_for_update()
+        if need_update:
+            # safe_update means only patches (major.minor.**patch**) should be auto-installed
+            if safe_update and not self._is_major_minor_equal(cur_version, new_version):
+                raise Exception('Update was blocked by flag "--safe-update", because updating from {} to {} may be '
+                                'unsafe. Try again without --safe-update if you want to update anyway.'
+                                .format(cur_version, new_version))
+            self.server_stop()
+            try:
+                self.backup_world_file()
+                self.update_server(new_version)
+            except Exception:
+                raise
+            finally:
+                self.server_start()
+
+            # if no exceptions so far
+            if not no_discord:
+                self.notify_about_update(new_version)
 
 
 # Click commands
@@ -251,7 +351,7 @@ def cli():
     \b
     You may do this by typing:
         vsupdater.py configure /path/to/your/server/
-    Also you can modify config file to get more control over paths vsupdater will use.
+    Also you can modify config file directly if you want.
 
     \b
     Then you may run update:
@@ -307,19 +407,54 @@ def worldbackup():
 
 @cli.command()
 @click.option('--force', is_flag=True, help='Update the server regardless the need')
-def update(force: bool):
-    """Performing update for your server.
+@click.option('--no-discord', is_flag=True, help='Do not notify about update via Discord WebHook')
+def update(force: bool, no_discord: bool):
+    """Performing update for your server (if needed).
 
-    Actually, it's doing more than just that:
+    What exactly is happening by running this command:
 
-    vsupdater is checking if server need to be updated (you can override this checking by using "--force" flag),
-    backing up your current world file in case in new version will corrupt it, backing up current server folder
-    (to be able to revert changes if update will fail for some reason), downloading newest stable server build,
-    unpacking it and replacing default server.sh with yours (from previous server folder).
+    Checking if your VS server is outdated (you can override this checking by using "--force" flag);
+    backing up current server folder (to be able to revert changes if update will fail for some reason);
+    downloading newest stable server build;
+    unpacking server files;
+    replacing default server.sh with previous one (from previous server folder).
+    notifies via Discord WebHook (if webhook is configured)
 
-    As result, you will get safely updated server, completely ready to run!"""
+    If something went wrong during update procedure, vsupdater restores your old server folder
+
+    If you don't want to send a notification about update to your discord, you may use "--no-discord" flag."""
     try:
-        u.perform_update(force)
+        u.perform_update(force, no_discord)
+    except Exception as e:
+        u.display_exception(e)
+
+
+@cli.command()
+@click.option('--safe-update', is_flag=True, help='Cancel update if major or minor version is differs')
+@click.option('--no-discord', is_flag=True, help='Do not notify about update via Discord WebHook')
+def autoupdate(safe_update: bool, no_discord: bool):
+    """Performing full update procedure for your server (if needed).
+
+    This command meant to use in cron, but you can also use it manually.
+
+    What exactly is happening by running this command:
+
+    Stopping your VS server;
+    backing up your current world file (in case in new version it will be corrupted);
+    running update procedure (read "vsupdate.py update --help" for more info);
+    starting VS server;
+    notifies via Discord WebHook (if webhook is configured)
+
+    If something went wrong during update procedure,
+    vsupdater restores your old server folder and makes attempt to start it.
+
+    If you want only patches to be installed automatically, use "--safe-update" flag with this command.
+
+    If you don't want to send a notification about update to your discord, you may use "--no-discord" flag.
+
+    As result, you will always get safely updated server, running on the latest version of VS!"""
+    try:
+        u.perform_auto_update(safe_update, no_discord)
     except Exception as e:
         u.display_exception(e)
 
@@ -327,5 +462,3 @@ def update(force: bool):
 if __name__ == '__main__':
     u = Updater()
     cli()
-    # print(u.get_datapath('D:\\sept\\vintagestory\\server'))
-    # print(u.get_worldfile_path('D:\\sept\\vintagestory\\data'))

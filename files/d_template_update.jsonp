@@ -1,0 +1,35 @@
+{{
+  "embeds": [
+    {{
+      "color": {color},
+      "title": "Vintage Story server update!",
+      "description": "Server was updated to **{version}**, download links below.",
+      "fields": [
+        {{
+          "name": "Windows",
+          "value": "[Client {version}]({cdn_url}vs_install_{version}.exe)",
+          "inline": "true"
+        }},
+        {{
+          "name": "Windows (update only)",
+          "value": "[Client {version}]({cdn_url}vs_update_{version}.exe)",
+          "inline": "true"
+        }},
+        {{
+          "name": "Linux",
+          "value": "[Client {version}]({cdn_url}vs_archive_{version}.tar.gz)"
+        }},
+        {{
+          "name": "Mac",
+          "value": "[Client {version}]({cdn_url}vs_mac_{version}.tar.gz)"
+        }}
+      ],
+      "thumbnail": {{
+        "url": "https://cdn.discordapp.com/icons/302152934249070593/61110c5fb68f08112c3c4d2666668511.png"
+      }},
+      "footer": {{
+        "text": "Generated automatically with vsupdater"
+      }}
+    }}
+  ]
+}}
